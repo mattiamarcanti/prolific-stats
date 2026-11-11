@@ -511,7 +511,12 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 .mtool-count { min-width: 100px; text-align: right; }
 .mtool [data-mcollapse] { min-width: 124px; }
 @media (max-width: 820px) { .mtool-count { text-align: left; } }
-/* sottotitolo della sezione Grafici del riepilogo: sempre su una riga */
-.ovcharts > .section-title .sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* barra dei periodi dentro la card "Andamento dei guadagni": scorre con la pagina (non è fissa) */
+.mtool.mtool-inline { position: static; box-shadow: none; background: var(--card-2); border: 1px solid var(--row); border-radius: 12px; margin: 0 0 14px; z-index: auto; }
+/* sottotitolo di "Andamento dei guadagni": sempre su una riga, così cambiare periodo non sposta la pagina */
+.ovcum .viz-head > div { min-width: 0; flex: 1 1 0; }
+.ovcum .viz-head p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* campi data della barra dei periodi: larghezza fissa (le cifre hanno larghezze diverse) */
 .mtool-goto input[type="date"] { width: 150px; }
+/* messaggio al posto di un grafico vuoto: centrato nel riquadro, senza cambiarne l'altezza */
+.chart-box > .empty-note { position: absolute; inset: 0; margin: 0; padding: 0 16px; display: grid; place-items: center; }

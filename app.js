@@ -557,8 +557,10 @@
       const open = t.keep && KEEP_OPEN.has(t.keep) ? KEEP_OPEN.get(t.keep) : t.open;
       return `<details ${open ? 'open' : ''}${t.keep ? ` data-keep="${esc(t.keep)}"` : ''}><summary>${t.label}</summary><div id="t-${t.id}"></div></details>`;
     };
-    return `<article class="card viz ${o.span || o.split ? 'span-2' : ''} ${o.split ? 'split' : ''}">
-      <div class="viz-head"><div><h3>${title}</h3>${sub ? `<p>${sub}</p>` : ''}</div>${seg}</div>
+    // o.cls: classi in più per la card; o.toolbar: HTML (es. una barra di filtri) tra il titolo e il grafico
+    return `<article class="card viz ${o.span || o.split ? 'span-2' : ''} ${o.split ? 'split' : ''} ${o.cls || ''}">
+      <div class="viz-head"><div><h3>${title}</h3>${sub ? `<p${o.subTip ? ` title="${o.subTip}"` : ''}>${sub}</p>` : ''}</div>${seg}</div>
+      ${o.toolbar || ''}
       <div class="viz-body">
         <div class="chart-box ${o.size || ''}"><canvas id="c-${id}" role="img" aria-label="${esc(title)}"></canvas></div>
         ${o.tables ? `<div class="viz-tables">${tables.map(det).join('')}</div>` : det(tables[0])}
@@ -763,7 +765,8 @@
       return link ? `<button type="button" class="card tile tile-link" data-thist="${link.join('|')}" title="Vedi nello storico">${inner}</button>` : `<div class="card tile">${inner}</div>`;
     };
 
-    // periodo dei grafici: tutta la sezione "Grafici" (grafici e tabelle) usa solo le righe del periodo
+    // periodo del grafico "Andamento dei guadagni": vale solo per quel grafico e per la sua tabella,
+    // gli altri grafici della sezione usano sempre tutti i dati
     const R = overviewRange(rows);
     const cr = R.key === 'all' ? rows : rows.filter(r => r.dateKey && (!R.from || r.dateKey >= R.from) && (!R.to || r.dateKey <= R.to));
     const cra = agg(cr);
@@ -775,10 +778,10 @@
     const chip = ([k, l, , , t]) => `<button type="button" data-ovp="${k}" class="${R.key === k ? 'on' : ''}" aria-pressed="${R.key === k}"${t ? ` title="${esc(t)}" aria-label="${esc(t)}"` : ''}>${esc(l)}</button>`;
     const sep = '<span class="mtool-sep" aria-hidden="true"></span>';
     const group = g => R.list.filter(x => x[5] === g);
-    const toolbar = `<div class="mtool card" role="region" aria-label="Periodo dei grafici">
+    const toolbar = `<div class="mtool mtool-inline" role="region" aria-label="Periodo del grafico">
         <div class="mtool-views">
           <span class="mtool-label">Periodo</span>
-          <div class="mtool-chips" role="group" aria-label="Periodo dei grafici">
+          <div class="mtool-chips" role="group" aria-label="Periodo del grafico">
             ${group('base').map(chip).join('')}${sep}<span class="mtool-sub" aria-hidden="true">Ultimi</span>${group('last').map(chip).join('')}
             ${group('year').length ? sep + group('year').map(chip).join('') : ''}${sep}
             <button type="button" data-ovp="custom" class="${R.key === 'custom' ? 'on' : ''}" aria-pressed="${R.key === 'custom'}" data-from="${R.effFrom}" data-to="${R.effTo}">Personalizzato</button>
@@ -810,29 +813,28 @@
         ${tile('Guadagno mese migliore', bMonth ? eur(bMonth.v) : '—', bMonth ? monthLabel(bMonth.k) : '', bMonth && { month: bMonth.k })}
       </div>
       ${ratesNote()}
-      <div class="ovcharts">
-        ${(t => `<h2 class="section-title">Grafici <span class="sub" aria-live="polite" title="${esc(t)}">${esc(t)}</span></h2>`)(`${R.key === 'all' ? 'tutto il periodo' : R.label}${rangeText ? ' · ' + rangeText : ''} · ${pl(cra.n, 'sottomissione', 'sottomissioni')} · ${eur(cra.saldo)}`)}
-        ${toolbar}
-        ${cr.length ? `<div class="grid-2">
-          ${vizCard('cum', 'Andamento dei guadagni', 'Guadagnato cumulato giorno per giorno nel periodo', { span: true, tableLabel: 'Tabella: dati e guadagni del periodo' })}
-          ${vizCard('status', 'Sottomissioni per stato', 'Quante sottomissioni hai in ogni stato', { split: true, tableLabel: 'Tabella: per stato' })}
-          ${vizCard('bucket', 'Studi per fascia di importo', 'Quanti studi pagati in ogni fascia, per valuta originale', { split: true, tableLabel: 'Tabella: per valuta' })}
-          ${vizCard('wd', 'Guadagni per giorno della settimana', 'In base all\'ora di inizio dello studio', { split: true, tableLabel: 'Tabella: per giorno della settimana' })}
-          ${vizCard('hour', 'Guadagni per fascia oraria', 'Ora di inizio dello studio (ora locale)', { split: true, tableLabel: 'Tabella: per ora' })}
-        </div>` : `<div class="card" style="padding:40px;text-align:center"><p class="empty-note" style="padding:0 0 14px">Nessuna sottomissione in questo periodo.</p><button class="btn" type="button" data-ovp="all">Mostra tutto</button></div>`}
+      <h2 class="section-title">Grafici</h2>
+      <div class="grid-2">
+        ${(t => vizCard('cum', 'Andamento dei guadagni', esc(t), {
+          span: true, cls: 'ovcum', subTip: esc(t), toolbar, tableLabel: 'Tabella: dati e guadagni del periodo',
+        }))(`Guadagnato cumulato giorno per giorno · ${R.key === 'all' ? 'tutto il periodo' : R.label}${rangeText ? ' · ' + rangeText : ''} · ${pl(cra.n, 'sottomissione', 'sottomissioni')} · ${eur(cra.saldo)}`)}
+        ${vizCard('status', 'Sottomissioni per stato', 'Quante sottomissioni hai in ogni stato', { split: true, tableLabel: 'Tabella: per stato' })}
+        ${vizCard('bucket', 'Studi per fascia di importo', 'Quanti studi pagati in ogni fascia, per valuta originale', { split: true, tableLabel: 'Tabella: per valuta' })}
+        ${vizCard('wd', 'Guadagni per giorno della settimana', 'In base all\'ora di inizio dello studio', { split: true, tableLabel: 'Tabella: per giorno della settimana' })}
+        ${vizCard('hour', 'Guadagni per fascia oraria', 'Ora di inizio dello studio (ora locale)', { split: true, tableLabel: 'Tabella: per ora' })}
       </div>`;
-    if (!cr.length) return;
 
-    // Andamento cumulato: asse dal primo all'ultimo giorno del periodo (mai oltre oggi)
-    const dated = cr.filter(r => r.dateKey);
-    const keys = dated.map(r => r.dateKey).sort();
+    // Andamento cumulato (solo il periodo scelto): asse dal primo all'ultimo giorno del periodo, mai oltre oggi;
+    // un periodo senza sottomissioni mostra una linea piatta a zero
+    const crDated = cr.filter(r => r.dateKey);
+    const keys = crDated.map(r => r.dateKey).sort();
     const start = R.from || keys[0], end0 = R.to || keys[keys.length - 1];
     const end = end0 && end0 > today && (!keys.length || keys[keys.length - 1] <= today) ? today : end0;
     if (start && end && start <= end) {
       const dayKeys = [];
       for (let d = fromKey(start), e = fromKey(end); d <= e; d = addDays(d, 1)) dayKeys.push(dkey(d));
       const daily = new Map(dayKeys.map(k => [k, 0]));
-      dated.forEach(r => { if (r.isEarned && daily.has(r.dateKey)) daily.set(r.dateKey, daily.get(r.dateKey) + r.earned); });
+      crDated.forEach(r => { if (r.isEarned && daily.has(r.dateKey)) daily.set(r.dateKey, daily.get(r.dateKey) + r.earned); });
       let c = 0;
       const cum = dayKeys.map(k => round2(c += daily.get(k)));
       const s1 = tok('--series-1');
@@ -863,14 +865,20 @@
           },
         },
       }, v => eur(v));
+    } else {
+      const cv = document.getElementById('c-cum');
+      if (cv) cv.parentElement.innerHTML = '<p class="empty-note">Nessun giorno da mostrare in questo periodo.</p>';
     }
     // tabella con un'unica riga: il periodo scelto (clic = Storico su quel periodo)
     mount('t-cum', bracketTable([{
       key: R.key, label: R.key === 'all' ? 'Tutto il periodo' : R.key === 'custom' ? 'Periodo personalizzato' : R.label, sub: rangeText, rows: cr,
     }], { kind: 'time', title: 'Periodo', noFoot: true, pickHint: () => 'Vedi nello storico le sottomissioni del periodo', onPick: () => openHistory(periodPatch) }));
 
+    // gli altri grafici della sezione non dipendono dal periodo: sempre tutti i dati
+    const dated = rows.filter(r => r.dateKey);
+
     // Stato
-    const statuses = groupRows(cr, r => r.status)
+    const statuses = groupRows(rows, r => r.status)
       .sort((x, y) => (STATUS_ORDER.indexOf(x.key) + 99 * (STATUS_ORDER.indexOf(x.key) < 0)) - (STATUS_ORDER.indexOf(y.key) + 99 * (STATUS_ORDER.indexOf(y.key) < 0)))
       .map(g => ({ ...g, label: g.key }));
     const stAgg = statuses.map(g => agg(g.rows));
@@ -890,13 +898,13 @@
         },
       },
     }, v => nf0.format(v));
-    mount('t-status', bracketTable(statuses, { kind: 'status', title: 'Stato', unit: 'stati', unitOne: 'stato', onPick: g => openHistory({ ...periodPatch, statuses: new Set([g.key]) }) }));
+    mount('t-status', bracketTable(statuses, { kind: 'status', title: 'Stato', unit: 'stati', unitOne: 'stato', onPick: g => openHistory({ statuses: new Set([g.key]) }) }));
 
     // Fasce di importo per valuta
     const labels = bucketLabels();
-    const curs = ['GBP', 'USD', 'EUR'].filter(c => cr.some(r => r.cur === c));
+    const curs = ['GBP', 'USD', 'EUR'].filter(c => rows.some(r => r.cur === c));
     const sc = [tok('--series-1'), tok('--series-2'), tok('--series-3')];
-    const counted = cr.filter(inBasis);
+    const counted = rows.filter(inBasis);
     makeChart('c-bucket', {
       type: 'bar',
       data: {
@@ -913,8 +921,8 @@
         },
       },
     }, v => nf0.format(v));
-    mount('t-bucket', bracketTable(groupRows(cr, r => r.cur).map(g => ({ ...g, label: CUR_NAME[g.key] || g.key, sub: pl(g.rows.length, 'sottomissione', 'sottomissioni') })),
-      { kind: 'currency', title: 'Valuta originale', unit: 'valute', unitOne: 'valuta', onPick: g => openHistory({ ...periodPatch, currencies: new Set([g.key]) }) }));
+    mount('t-bucket', bracketTable(groupRows(rows, r => r.cur).map(g => ({ ...g, label: CUR_NAME[g.key] || g.key, sub: pl(g.rows.length, 'sottomissione', 'sottomissioni') })),
+      { kind: 'currency', title: 'Valuta originale', unit: 'valute', unitOne: 'valuta', onPick: g => openHistory({ currencies: new Set([g.key]) }) }));
 
     // Giorno della settimana
     const wdGroups = WD.map((name, i) => ({ key: i, label: name, rows: dated.filter(r => (r.when.getDay() + 6) % 7 === i) }));
