@@ -95,12 +95,16 @@
 }
 
 * { box-sizing: border-box; }
-/* spazio della barra di scorrimento sempre riservato: se un filtro accorcia la pagina, la larghezza non cambia */
-html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
+/* barra di scorrimento sempre presente: se un filtro accorcia la pagina la larghezza non cambia,
+   e a differenza di scrollbar-gutter non resta una striscia vuota accanto alla navigazione sulle pagine corte */
+html { -webkit-text-size-adjust: 100%; overflow-y: scroll; }
 body {
   margin: 0;
   font-family: var(--font);
   font-size: 15px;
+  /* New Hero è circa il 10% più grande di Segoe UI a parità di dimensione: con questa x-height
+     il font di riserva viene ingrandito quanto basta per somigliare a Prolific (misurato sui suoi testi) */
+  font-size-adjust: 0.55;
   line-height: 1.45;
   color: var(--ink);
   background: var(--page);
@@ -380,7 +384,7 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 .mtool-views { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 520px; }
 .mtool-label { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 500; flex: none; }
 .mtool-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-width: 0; }
-.mtool-chips button { border: 1px solid var(--border); background: var(--card); border-radius: 999px; padding: 5px 12px; font-size: 14px; white-space: nowrap; }
+.mtool-chips button { border: 1px solid var(--border); background: var(--card); border-radius: 999px; padding: 5px 10px; font-size: 13px; white-space: nowrap; }
 .mtool-chips button:hover { border-color: var(--accent-border); color: var(--link); }
 .mtool-chips button.on { border-color: var(--accent-border); color: var(--link); background: var(--accent-soft); }
 .mtool-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; flex: none; }
