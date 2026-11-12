@@ -103,12 +103,15 @@
     thresholds: [1, 3, 5, 10],
     basis: 'earned',
     theme: 'light',
+    // commissioni del prelievo in %: PayPal → Wise (uguale per $ e £) e conversione in euro su Wise
+    fees: { paypal: 1, usd: 0.29, gbp: 0.33 },
   };
   function loadSettings() {
     const s = store.get('ps.settings', {}) || {};
     return {
       ...DEFAULTS, ...s,
       rates: { ...DEFAULTS.rates, ...(s.rates || {}) },
+      fees: { ...DEFAULTS.fees, ...(s.fees || {}) },
       thresholds: Array.isArray(s.thresholds) && s.thresholds.length ? s.thresholds : DEFAULTS.thresholds,
     };
   }
@@ -122,7 +125,7 @@
   let FILE = store.get('ps.fileinfo', null);
   const F = { q: '', study: '', researcher: '', researcherExact: false, from: '', to: '', min: '', max: '', statuses: new Set(), currencies: new Set(), datePreset: '' };
   let TAB = store.get('ps.tab', 'overview');
-  if (!['overview', 'monthly', 'studies', 'researchers', 'history'].includes(TAB)) TAB = 'overview';
+  if (!['overview', 'monthly', 'studies', 'researchers', 'history', 'withdraw'].includes(TAB)) TAB = 'overview';
   let HSORT = 'date-desc', HLIMIT = 50, HOPEN = true;
   let MSEG = 'money', SSEG = 'saldo', RSEG = 'saldo';
   // schede mensili: quali mesi mostrare ('all', 'y2025' = anno, 'n6' = ultimi 6 mesi)
@@ -130,6 +133,10 @@
   const MCOLLAPSED = new Set(); // schede mensili ridotte (solo mese e guadagnato), chiave 'YYYY-MM'
   // periodo della sezione "Grafici" del riepilogo: k = chiave di overviewPeriods() o 'custom' con from/to
   let OVP = { k: 'all', from: '', to: '' };
+  // calcolatore del prelievo: saldi in $ e £ come li ha scritti l'utente (salvati) e tassi scritti a mano
+  // (solo per questa sessione, '' = tasso BCE più recente)
+  const WDA = (w => ({ usd: String(w.usd || ''), gbp: String(w.gbp || '') }))(store.get('ps.withdraw', null) || {});
+  const WDR = { USD: '', GBP: '' };
   // stato aperto/chiuso dei <details data-keep="..."> da conservare tra un rendering e l'altro
   const KEEP_OPEN = new Map();
   const charts = [];
@@ -676,6 +683,9 @@
     destroyCharts();
     setChartDefaults();
     $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === TAB));
+    const wdBtn = $('#btnWithdraw');
+    wdBtn.classList.toggle('on', TAB === 'withdraw');
+    wdBtn.setAttribute('aria-pressed', String(TAB === 'withdraw'));
     $$('.panel').forEach(p => { p.hidden = p.dataset.panel !== TAB; });
     // i filtri esistono solo nello Storico: negli altri tab barra nascosta e dati completi
     $('#filterbar').hidden = $('#chips').hidden = TAB !== 'history';
@@ -685,7 +695,7 @@
       panel.innerHTML = `<div class="card" style="margin-top:28px;padding:40px;text-align:center"><p class="empty-note" style="padding:0 0 14px">Nessuna sottomissione corrisponde ai filtri selezionati.</p><button class="btn" type="button" data-reset>Azzera filtri</button></div>`;
       return;
     }
-    ({ overview: renderOverview, monthly: renderMonthly, studies: renderStudies, researchers: renderResearchers, history: renderHistory }[TAB] || renderOverview)(panel, rows);
+    ({ overview: renderOverview, monthly: renderMonthly, studies: renderStudies, researchers: renderResearchers, history: renderHistory, withdraw: renderWithdraw }[TAB] || renderOverview)(panel, rows);
   }
   // cambio tab: uscendo dallo Storico i filtri si azzerano
   function setTab(t) {
@@ -1624,6 +1634,186 @@
       </div>`;
   }
 
+  // ---------------------------------------------------------- PRELIEVO
+  /* Calcolatore del prelievo: i saldi in $ e £ vanno da Prolific a PayPal, da PayPal a Wise
+     (commissione PayPal) e su Wise vengono convertiti in euro (commissione Wise diversa per valuta);
+     i due importi in euro si sommano. Ogni passaggio è arrotondato al centesimo, come gli importi veri.
+     Mentre si scrive si aggiornano solo i risultati (drawWithdraw), così i campi non perdono il fuoco. */
+  const cents = v => Math.round(+(v * 100).toFixed(6)) / 100;
+  const nfRate = new Intl.NumberFormat('it-IT', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  const nfPct = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 4 });
+  const pctTxt = v => nfPct.format(v) + '%';
+  const WD_FEES = ['paypal', 'gbp', 'usd'];
+  // numero scritto all'italiana o all'inglese ("12,50", "1.234,56", "£1,234.56"): l'ultimo separatore è quello dei decimali.
+  // null = campo vuoto, NaN = testo non valido
+  function parseNum(s) {
+    const t = String(s ?? '').replace(/[\s£$€%]/g, '');
+    if (!t) return null;
+    if (!/^(\d[\d.,]*|[.,]\d+)$/.test(t)) return NaN;
+    const i = Math.max(t.lastIndexOf(','), t.lastIndexOf('.'));
+    const n = i < 0 ? +t : +(t.slice(0, i).replace(/[.,]/g, '') + '.' + t.slice(i + 1));
+    return isFinite(n) ? n : NaN;
+  }
+  function wdValid(k, v) {
+    const n = parseNum(v);
+    if (n === null) return true;
+    if (Number.isNaN(n)) return false;
+    if (k[0] === 'r') return n > 0;   // tasso
+    if (k[0] === 'f') return n < 100; // commissione in %
+    return true;
+  }
+  function wdRateSrc() {
+    const r = S.rates;
+    if (r.source === 'BCE') return `tasso BCE del ${fmtKey(r.date)}`;
+    if (r.source === 'manuale') return 'tasso fisso scritto nelle impostazioni';
+    return `tasso predefinito${r.date ? ` del ${fmtKey(r.date)}` : ''}, non aggiornato`;
+  }
+  function wdCalc() {
+    const fee = k => +S.fees[k] || 0;
+    const amount = k => { const n = parseNum(WDA[k]); return n > 0 ? cents(n) : 0; };
+    const one = (cur, amt, wiseFee) => {
+      const typed = parseNum(WDR[cur]);
+      const own = typed > 0;
+      const rate = own ? typed : (+S.rates[cur] || 1);
+      const pp = cents(amt * fee('paypal') / 100); // commissione PayPal → Wise
+      const wise = cents(amt - pp);                // arrivano su Wise
+      const wf = cents(wise * wiseFee / 100);      // commissione di conversione Wise
+      const conv = cents(wise - wf);               // importo convertito
+      const out = cents(conv * rate);              // euro ricevuti
+      return { cur, amount: amt, pp, wise, fee: wiseFee, wf, conv, rate, own, typed: WDR[cur] !== '', out, gross: cents(amt * rate), ppEur: cents(pp * rate) };
+    };
+    const u = one('USD', amount('usd'), fee('usd')), g = one('GBP', amount('gbp'), fee('gbp'));
+    const total = cents(u.out + g.out), gross = cents(u.gross + g.gross);
+    const fees = cents(gross - total);
+    // la parte di Wise è la differenza, così le due voci sommano esattamente il totale delle commissioni
+    const ppEur = Math.min(cents(u.ppEur + g.ppEur), fees);
+    return { u, g, total, gross, fees, ppEur, wiseEur: cents(fees - ppEur), paypalFee: fee('paypal') };
+  }
+  function renderWithdraw(p) {
+    // un nuovo rendering (tassi aggiornati, cambio di tema…) non deve togliere il cursore dal campo in cui si scrive
+    const ae = document.activeElement;
+    const keep = ae && ae.id && p.contains(ae) ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
+    const amountField = (k, cur, label) => `<label class="wd-field"><span class="wd-flabel">${label}</span>
+        <span class="wd-input"><span class="wd-sym" aria-hidden="true">${SYM[cur]}</span><input type="text" id="wd-${k}" data-wd="${k}" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0,00" value="${esc(WDA[k])}"></span></label>`;
+    const rateField = cur => `<label class="field">1 ${SYM[cur]} (${cur}) in euro<input type="text" id="wd-r${cur}" data-wd="r${cur}" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(WDR[cur] || nfRate.format(+S.rates[cur] || 1))}"><span class="wd-src" id="wd-src-${cur}"></span></label>`;
+    const feeField = (k, label) => `<label class="field">${label}<input type="text" id="wd-f${k}" data-wd="f${k}" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(nfPct.format(+S.fees[k] || 0))}"></label>`;
+    p.innerHTML = `
+      <h2 class="section-title">Prelievo <span class="sub">Quanto guadagni in euro dopo PayPal e Wise</span></h2>
+      <div class="card wd-top">
+        <div class="wd-inputs">
+          ${amountField('gbp', 'GBP', 'Sterline da prelevare')}
+          ${amountField('usd', 'USD', 'Dollari da prelevare')}
+          <p class="wd-note">Scrivi i saldi in sterline e in dollari che vedi su Prolific. Restano salvati in questo browser.</p>
+        </div>
+        <div class="wd-hero" id="wdHero" aria-live="polite"></div>
+        <div class="wd-flow" id="wdFlow" aria-label="Percorso del prelievo"></div>
+      </div>
+      <h2 class="section-title">Calcolo passo per passo <span class="sub">Ogni importo è arrotondato al centesimo</span></h2>
+      <div class="grid-2" id="wdTrace"></div>
+      <h2 class="section-title">Tassi e commissioni</h2>
+      <div class="card wd-params">
+        <div>
+          <h3>Tasso di cambio</h3>
+          <div class="wd-prow">${rateField('GBP')}${rateField('USD')}</div>
+          <p class="wd-note">Wise converte al tasso di mercato del momento, quindi il risultato reale può cambiare di qualche centesimo. Per un calcolo esatto scrivi qui il tasso che ti mostra Wise.</p>
+          ${rateStatus.state === 'err' ? `<p class="wd-note err">${esc(rateStatus.msg)}</p>` : ''}
+          <div class="btn-row"><button class="btn sm" type="button" data-wd-refresh>Aggiorna tassi BCE</button><button class="btn sm" type="button" data-wd-ecb>Usa i tassi BCE</button></div>
+        </div>
+        <div>
+          <h3>Commissioni</h3>
+          <div class="wd-prow three">${feeField('paypal', 'PayPal → Wise (%)')}${feeField('gbp', 'Wise £ → € (%)')}${feeField('usd', 'Wise $ → € (%)')}</div>
+          <p class="wd-note">La commissione PayPal vale sia per le sterline sia per i dollari. Le commissioni restano salvate in questo browser.</p>
+          <div class="btn-row"><button class="btn sm" type="button" data-wd-fees-reset>Ripristina ${WD_FEES.map(k => pctTxt(DEFAULTS.fees[k])).join(' · ')}</button></div>
+        </div>
+      </div>`;
+    drawWithdraw();
+    if (keep) {
+      const el = document.getElementById(keep.id);
+      if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (e) { /* campo senza selezione */ } }
+    }
+  }
+  // risultati, percorso e calcolo passo per passo (si aggiornano a ogni tasto, senza toccare i campi)
+  function drawWithdraw() {
+    const trace = $('#wdTrace');
+    if (!trace) return;
+    const c = wdCalc();
+    const both = [c.g, c.u].filter(x => x.amount); // sterline prima dei dollari, come nei campi
+    const feePct = c.gross ? nf2.format(c.fees / c.gross * 100) + '%' : '0%';
+    const rateSrc = x => (x.own ? 'tasso scritto da te' : x.typed ? `valore non valido, uso il ${wdRateSrc()}` : wdRateSrc());
+
+    $('#wdHero').innerHTML = `<div class="wd-hero-label">Guadagno in euro</div>
+      <div class="wd-hero-value${c.total ? '' : ' zero'}">${eur(c.total)}</div>
+      <div class="wd-hero-sub">${both.length ? `dopo ${eur(c.fees)} di commissioni (${feePct} del valore al cambio)` : 'Scrivi almeno un importo per vedere il calcolo.'}</div>
+      <div class="wd-hero-parts">${both.length ? both.map(x => `${money(x.amount, x.cur)} → ${eur(x.out)}`).join(' · ') : '&nbsp;'}</div>`;
+
+    const arrow = t => `<span class="wd-arrow">${t ? `<span class="wd-fee">${t}</span>` : ''}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12h15m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+    $('#wdFlow').innerHTML = `<span class="wd-node">Prolific</span>${arrow('')}
+      <span class="wd-node">PayPal <small>£ e $</small></span>${arrow('−' + pctTxt(c.paypalFee))}
+      <span class="wd-node">Wise <small>£ e $</small></span>${arrow(`cambio · £ −${pctTxt(c.g.fee)} · $ −${pctTxt(c.u.fee)}`)}
+      <span class="wd-node">Wise <small>€</small></span>${arrow('')}
+      <span class="wd-node">Carta Wise</span>`;
+
+    const step = (n, label, formula, val, cls) => `<li class="wd-step ${cls || ''}"><span class="wd-n" aria-hidden="true">${n}</span>
+      <div class="wd-txt"><div class="wd-label">${label}</div>${formula ? `<div class="wd-formula">${formula}</div>` : ''}</div>
+      <div class="wd-val">${val}</div></li>`;
+    const curCard = x => {
+      const m = v => money(v, x.cur), sym = SYM[x.cur], name = x.cur === 'USD' ? 'Dollari' : 'Sterline', r = nfRate.format(x.rate);
+      return `<article class="card wd-card${x.amount ? '' : ' wd-zero'}">
+        <div class="wd-head"><h3>${name} (${sym})</h3><p>${x.amount ? `${m(x.amount)} diventano ${eur(x.out)}` : `Nessun importo in ${name.toLowerCase()}`}</p></div>
+        <ol class="wd-steps">
+          ${step(1, 'Saldo su PayPal', 'Prelevato da Prolific', m(x.amount))}
+          ${step(2, `Commissione PayPal → Wise (${pctTxt(c.paypalFee)})`, `${m(x.amount)} × ${pctTxt(c.paypalFee)}`, '−' + m(x.pp), 'neg')}
+          ${step(3, 'Arrivano su Wise', `${m(x.amount)} − ${m(x.pp)}`, m(x.wise), 'sub')}
+          ${step(4, `Commissione di conversione Wise (${pctTxt(x.fee)})`, `${m(x.wise)} × ${pctTxt(x.fee)}`, '−' + m(x.wf), 'neg')}
+          ${step(5, 'Importo da convertire', `${m(x.wise)} − ${m(x.wf)}`, m(x.conv), 'sub')}
+          ${step(6, 'Tasso di cambio', esc(cap(rateSrc(x))), `1 ${sym} = ${r} €`, 'rate')}
+          ${step(7, 'Ricevi in euro', `${m(x.conv)} × ${r}`, eur(x.out), 'final')}
+        </ol>
+      </article>`;
+    };
+    const terms = f => (both.length ? both.map(f).join(' + ') : '—');
+    trace.innerHTML = `${curCard(c.g)}${curCard(c.u)}
+      <article class="card wd-card span-2">
+        <div class="wd-total-grid">
+          <div>
+            <div class="wd-head"><h3>Totale in euro</h3><p>Somma dei due cambi: è quanto guadagni in euro sulla carta Wise</p></div>
+            <ol class="wd-steps">
+              ${step('£', 'Euro dalle sterline', 'Passo 7 delle sterline', eur(c.g.out))}
+              ${step('$', 'Euro dai dollari', 'Passo 7 dei dollari', eur(c.u.out))}
+              ${step('=', 'Guadagno in euro', `${eur(c.g.out)} + ${eur(c.u.out)}`, eur(c.total), 'final')}
+            </ol>
+          </div>
+          <div>
+            <div class="wd-head"><h3>Quanto costano le commissioni</h3><p>Confronto con un cambio senza commissioni, allo stesso tasso</p></div>
+            <ol class="wd-steps">
+              ${step('A', 'Valore al cambio senza commissioni', terms(x => `${money(x.amount, x.cur)} × ${nfRate.format(x.rate)}`), eur(c.gross))}
+              ${step('B', 'Commissioni totali', `${eur(c.gross)} − ${eur(c.total)} · ${feePct} del valore`, '−' + eur(c.fees), 'neg sub')}
+              ${step('C', 'Di cui PayPal → Wise', terms(x => `${money(x.pp, x.cur)} × ${nfRate.format(x.rate)}`), '−' + eur(c.ppEur), 'neg')}
+              ${step('D', 'Di cui conversione Wise', `${eur(c.fees)} − ${eur(c.ppEur)}`, '−' + eur(c.wiseEur), 'neg')}
+            </ol>
+          </div>
+        </div>
+      </article>`;
+
+    ['USD', 'GBP'].forEach(cur => { const el = $('#wd-src-' + cur); if (el) el.textContent = cap(rateSrc(cur === 'USD' ? c.u : c.g)); });
+    $$('[data-wd]').forEach(el => (el.closest('.wd-input') || el).classList.toggle('bad', !wdValid(el.dataset.wd, el.value)));
+    const ecb = $('[data-wd-ecb]');
+    if (ecb) ecb.disabled = !WDR.USD && !WDR.GBP;
+    const rst = $('[data-wd-fees-reset]');
+    if (rst) rst.disabled = WD_FEES.every(k => +S.fees[k] === DEFAULTS.fees[k]);
+  }
+  function onWithdrawInput(t) {
+    const k = t.dataset.wd;
+    if (k === 'usd' || k === 'gbp') { WDA[k] = t.value; store.set('ps.withdraw', WDA); }
+    else if (k === 'rUSD' || k === 'rGBP') WDR[k.slice(1)] = t.value.trim();
+    else if (k[0] === 'f') {
+      // campo vuoto = nessuna commissione; un testo non valido non cambia il valore salvato
+      const n = parseNum(t.value);
+      if (n === null || (n >= 0 && n < 100)) { S.fees[k.slice(1)] = n || 0; saveSettings(); }
+    }
+    drawWithdraw();
+  }
+
   // ---------------------------------------------------------- barra filtri
   function setDateRange(from, to, preset) {
     F.from = from || ''; F.to = to || ''; F.datePreset = preset || '';
@@ -1812,6 +2002,7 @@
     $('#empty').hidden = on;
     $('#app').hidden = !on;
     $('#wallet').hidden = !on;
+    $('#btnWithdraw').hidden = !on;
   }
   function loadText(text, name, persist) {
     try {
@@ -1928,6 +2119,10 @@
       if ((x = el('[data-fstudy]'))) { F.study = DATA[+x.dataset.fstudy].study; afterFilterChange(); return; }
       if ((x = el('[data-fres]'))) { F.researcher = DATA[+x.dataset.fres].researcher; F.researcherExact = true; afterFilterChange(); return; }
       if ((x = el('#hCollapse'))) { HOPEN = !HOPEN; renderActive(); return; }
+      // prelievo
+      if ((x = el('[data-wd-refresh]'))) { x.disabled = true; x.textContent = 'Aggiorno…'; refreshRates(false); return; }
+      if ((x = el('[data-wd-ecb]'))) { WDR.USD = ''; WDR.GBP = ''; renderActive(); return; }
+      if ((x = el('[data-wd-fees-reset]'))) { S.fees = { ...DEFAULTS.fees }; saveSettings(); renderActive(); return; }
       if ((x = el('[data-hmore]'))) { HLIMIT = x.dataset.hmore === 'all' ? Infinity : HLIMIT + 50; renderActive(); return; }
       if ((x = el('.htable th[data-sort]'))) {
         const k = x.dataset.sort, [ck, cd] = HSORT.split('-');
@@ -1948,7 +2143,8 @@
 
     document.addEventListener('input', e => {
       const t = e.target;
-      if (t.id === 'fRes') { F.researcher = t.value; F.researcherExact = false; afterFilterChange(true); }
+      if (t.dataset && t.dataset.wd) onWithdrawInput(t);
+      else if (t.id === 'fRes') { F.researcher = t.value; F.researcherExact = false; afterFilterChange(true); }
       else if (t.id === 'fMin') { F.min = t.value; afterFilterChange(true); }
       else if (t.id === 'fMax') { F.max = t.value; afterFilterChange(true); }
       else if (t.id === 'thr') {
