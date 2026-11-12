@@ -1866,7 +1866,8 @@
       const ordered = counts.sort((a, b) => ((STATUS_ORDER.indexOf(a.key) + 1 || 99) - (STATUS_ORDER.indexOf(b.key) + 1 || 99)));
       pop.innerHTML = `<h4>Stato</h4>
         ${ordered.map(g => `<label class="opt"><input type="checkbox" data-status="${esc(g.key)}" ${F.statuses.has(g.key) ? 'checked' : ''}>${statusPill(g.key, true)}<span class="n">${g.rows.length}</span></label>`).join('')}
-        <hr><div class="quick"><button type="button" data-squick="paid">Solo pagati</button><button type="button" data-squick="lost">Solo non pagati</button><button type="button" data-squick="">Tutti</button></div>`;
+        <hr><div class="quick"><button type="button" data-squick="paid">Solo pagati</button><button type="button" data-squick="open">Solo pagati o in attesa</button></div>
+        <div class="quick"><button type="button" data-squick="lost">Solo non pagati</button><button type="button" data-squick="">Tutti</button></div>`;
     } else if (name === 'amount') {
       const t = S.thresholds, labels = bucketLabels();
       const ranges = labels.map((l, j) => [j === 0 ? '' : t[j - 1], j < t.length ? +(t[j] - 0.01).toFixed(2) : '']);
@@ -2086,7 +2087,9 @@
       if ((x = el('[data-mpick]'))) { const r = monthRange(x.dataset.mpick); setDateRange(r.from, r.to, 'm' + x.dataset.mpick); return; }
       if ((x = el('[data-squick]'))) {
         const v = x.dataset.squick;
-        F.statuses = v === 'paid' ? new Set(['APPROVED', 'SCREENED OUT']) : v === 'lost' ? new Set(DATA.filter(r => !r.isEarned && !r.isPending).map(r => r.status)) : new Set();
+        F.statuses = v === 'paid' ? new Set(['APPROVED', 'SCREENED OUT'])
+          : v === 'open' ? new Set(['APPROVED', 'SCREENED OUT', 'AWAITING REVIEW']) // pagati + in attesa di revisione
+            : v === 'lost' ? new Set(DATA.filter(r => !r.isEarned && !r.isPending).map(r => r.status)) : new Set();
         afterFilterChange(); return;
       }
       if ((x = el('[data-arange]'))) { const [a, b] = x.dataset.arange.split('|'); F.min = a; F.max = b; afterFilterChange(); return; }

@@ -504,6 +504,8 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 .dd[data-dd="amount"] .pill { width: 190px; }
 .dd[data-dd="currency"] .pill { width: 150px; }
 .dd[data-dd="sort"] .pill { width: 290px; }
+/* menu Stato: "Solo pagati" e "Solo pagati o in attesa" sulla stessa riga (sul telefono il menu è già largo quanto lo schermo) */
+@media (min-width: 561px) { .dd[data-dd="status"] .pop { min-width: 320px; } }
 @media (max-width: 560px) {
   .pills .dd { flex: 1 1 calc(50% - 5px); min-width: 0; }
   .pills .dd .pill { width: 100%; }
